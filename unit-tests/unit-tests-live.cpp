@@ -268,6 +268,7 @@ TEST_CASE("Sync sanity", "[live]") {
     }
 }
 
+
 TEST_CASE("Sync different fps", "[live][!mayfail]") {
 
     const double DELTA = 20;
@@ -4320,6 +4321,86 @@ TEST_CASE("Syncer clean_inactive_streams by frame number with software-device de
         }
     }
 }
+
+
+
+bool match(stream_profile profile, rs2_stream stream_type, int fps, int h, int w, rs2_format image_format) {
+    auto  video = profile.as<rs2::video_stream_profile>();
+    if (!video) return false;
+    return profile.stream_type() == stream_type && profile.fps() == fps && video.height() == h &&
+        video.width() == w && profile.format() == image_format;
+}
+
+
+struct Streamer {
+    std::vector<frame> frames;
+
+    void operator() (frame frame) {
+        frames.push_back(frame);
+    }
+};
+
+
+TEST_CASE("Segmentation Fault on sensor close", "[live]") {
+    context ctx;
+    if (make_context(SECTION_FROM_TEST_NAME, &ctx))
+    {
+        auto list = ctx.query_devices();
+        REQUIRE(list.size());
+        auto dev = list[0];
+        auto sensors = dev.query_sensors();
+        for (auto sensor : sensors)
+        {
+            std::string name = sensor.get_info(RS2_CAMERA_INFO_NAME);
+            if (name == "RGB Camera" || name == "Color Camera")
+            {
+                auto profiles = sensor.get_stream_profiles();
+                for (auto profile : profiles)
+                {
+                    auto curr_profile = video_stream_profile(profile);
+                    if (match(curr_profile, RS2_STREAM_COLOR, 30, 480, 640, RS2_FORMAT_RGB8))
+                    {
+                        sensor.open(profile);
+                    }         
+                }
+            }
+            else if (name == "Stereo Module" || name == "Depth Camera") {
+                auto profiles = sensor.get_stream_profiles();
+                std::vector<rs2::stream_profile> targets;
+                for (auto profile : profiles)
+                {
+                    auto curr_profile = video_stream_profile(profile);
+                    if (match(curr_profile, RS2_STREAM_DEPTH, 30, 480, 640, RS2_FORMAT_Z16) ||
+                        match(curr_profile, RS2_STREAM_INFRARED, 30, 480, 640, RS2_FORMAT_Y8))
+                    {
+                        targets.push_back(profile);
+                    }
+                }
+                REQUIRE_NOTHROW(sensor.open(targets));
+            }
+        }
+
+        for (auto sensor : sensors)
+        {
+            Streamer s = Streamer();
+            REQUIRE_NOTHROW(sensor.start(s));
+        }
+
+        std::this_thread::sleep_for(std::chrono::seconds(3));
+
+        for (auto sensor : sensors)
+        {
+            std::cout << sensor.get_info(RS2_CAMERA_INFO_NAME) << " pre-stop\n";
+            sensor.stop();
+            std::cout << "post-stop\n; " << "pre-close, next line causes SIGSEGV\n";
+            sensor.close();
+            std::cout << "post-close\n";
+        }
+    }
+
+    std::cout << "finished";
+}
+
 
 #define ADD_ENUM_TEST_CASE(rs2_enum_type, RS2_ENUM_COUNT)                                  \
 TEST_CASE(#rs2_enum_type " enum test", "[live]") {                                         \
