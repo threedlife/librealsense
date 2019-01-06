@@ -31,6 +31,9 @@ namespace librealsense
 
         frame_interface* allocate_points(std::shared_ptr<stream_profile_interface> stream, frame_interface* original) override;
 
+        frame_interface* allocate_pose_frame(std::shared_ptr<stream_profile_interface> stream, rs2_quaternion q, rs2_vector gv,
+            rs2_vector av, rs2_extension frame_type = RS2_EXTENSION_POSE_FRAME) override;
+
         void frame_ready(frame_holder result) override;
 
         rs2_source* get_c_wrapper() override { return _c_wrapper.get(); }

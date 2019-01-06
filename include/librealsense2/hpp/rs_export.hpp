@@ -11,6 +11,8 @@
 #include <cassert>
 #include "rs_processing.hpp"
 #include "rs_internal.hpp"
+#include "../common/rendering.h"
+
 
 namespace rs2
 {
@@ -231,6 +233,127 @@ namespace rs2
         }
 
         std::string fname;
+    };
+
+
+
+    class estimate_motion : public filter {
+    public:
+        estimate_motion(std::string filename = "RealSense Frameset ")
+            : filter([this](frame f, frame_source& s) { estimate(f, s); })
+        {}
+    private:
+        float3 theta;
+        bool firstAccel = true;
+        void estimate(rs2::frame frame, frame_source& source)
+        {
+            double last_ts[RS2_STREAM_COUNT];
+            double dt[RS2_STREAM_COUNT];
+            float alpha = 0.98;
+            rs2::matrix4 rot;
+            rs2_vector gv, av;
+            rs2::stream_profile profile;
+
+            profile = frame.get_profile();
+            // register time passed since previous frame of the same stream type
+
+            // TODO: fix this to handle one frame at at time, check if gyro or acc
+            unsigned long fnum = frame.get_frame_number();
+            double ts = f.get_timestamp();
+            dt[profile.stream_type()] = (ts - last_ts[profile.stream_type()]) / 1000.0;
+            last_ts[profile.stream_type()] = ts;
+
+            auto fa = frames.first(RS2_STREAM_ACCEL, RS2_FORMAT_MOTION_XYZ32F);
+            rs2::motion_frame accel = fa.as<rs2::motion_frame>();
+
+            auto fg = frames.first(RS2_STREAM_GYRO, RS2_FORMAT_MOTION_XYZ32F);
+            rs2::motion_frame gyro = fg.as<rs2::motion_frame>();
+
+            if (gyro)
+            {
+                gv = gyro.get_motion_data();
+
+                // measures from gyro give bigger angles than actual movement
+                double gyroX = gv.x * 0.5; //- bias.x; // Pitch
+                double gyroY = gv.y * 0.5;//- bias.y; // Yaw
+                double gyroZ = gv.z * 0.5; //- bias.z; // Roll
+
+                // new angle equals gyro measures * time passed since last measurement
+                gyroX *= dt[RS2_STREAM_GYRO];
+                gyroY *= dt[RS2_STREAM_GYRO];
+                gyroZ *= dt[RS2_STREAM_GYRO];
+
+                // Get compensation from GYRO
+                theta.x -= gyroZ;
+                theta.y += gyroY;
+                theta.z += gyroX;
+            }
+
+            if (accel)
+            {
+                av = accel.get_motion_data();
+                float R = sqrt(av.x * av.x + av.y * av.y + av.z * av.z);
+
+                float accelY = acos(av.y / R) + M_PI;
+                float accelZ = atan2(av.y, av.z);
+                float accelX = atan2(av.x, sqrt(av.y * av.y + av.z * av.z));
+
+                if (firstAccel)
+                {
+                    // prev = accelX;
+                    firstAccel = false;
+                    theta.x = accelX;
+                    theta.y = accelY;
+                    theta.z = accelZ;
+                }
+                else
+                {
+                    /* Apply Complementary Filter: 
+                    - high-pass filter = thetaX * alpha:  allows short-duration signals to pass through while filtering out signals
+                      that are steady over time, is used to cancel out drift.
+                    - low-pass filter = accelX * (1- alpha): lets through long term changes, filtering out short term fluctuations */
+                    theta.x = theta.x * alpha + accelX * (1 - alpha);
+                    theta.y = theta.y * 0.9999 + accelY * 0.0001;
+                    theta.z = theta.z * alpha + accelZ * (1 - alpha);
+                }
+            }
+
+            // get rotation matrix
+            float _rx[4][4] = {
+                { 1 , 0, 0, 0 },
+                { 0, cos(theta.z + M_PI / 2), -sin(theta.z + M_PI / 2), 0 },
+                { 0, sin(theta.z + M_PI / 2), cos(theta.z + M_PI / 2), 0 },
+                { 0, 0, 0, 1 }
+            };
+
+            float _ry[4][4] = {
+                { cos(theta.y), 0, sin(theta.y), 0 },
+                { 0, 1, 0, 0 },
+                { -sin(theta.y), 0, cos(theta.y), 0 },
+                { 0, 0, 0, 1 }
+            };
+
+            float _rz[4][4] = {
+                { cos(theta.x), -sin(theta.x),0, 0 },
+                { sin(theta.x), cos(theta.x), 0, 0 },
+                { 0 , 0, 1, 0 },
+                { 0, 0, 0, 1 }
+            };
+
+            rs2::matrix4 rx(_rx);
+            rs2::matrix4 ry(_ry);
+            rs2::matrix4 rz(_rz);
+
+            //glm_rotate_make(mat4 m, float angle, vec3 axis)
+            rot = rx * ry * rz;
+
+            rs2_quaternion q = rot.to_quaternion();
+
+            // TODO: what is the profile?
+            auto pose = source.allocate_pose_frame(profile, q, gv, av, RS2_EXTENSION_POSE_FRAME);
+
+            source.frame_ready(pose);
+        }
     };
 }
 

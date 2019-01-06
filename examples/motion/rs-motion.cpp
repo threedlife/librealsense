@@ -1,12 +1,15 @@
 #include <librealsense2/rs.hpp>
-#include <algorithm>
+//#include <algorithm>
 #include <iostream>
 #include <thread>
-#include <../third-party/eigen/Eigen/Geometry>
+//#include <../third-party/eigen/Eigen/Geometry>
 
 #include <mutex>
 
 #include "example.hpp"          // Include short list of convenience functions for rendering
+#include "rendering.h"
+#include "rs_export.hpp"
+
 #define GLFW_INCLUDE_GLU
 #include <GLFW/glfw3.h>
 
@@ -83,14 +86,11 @@ public:
             y = (maxY + minY) / 2.0;
             z = (maxZ + minZ) / 2.0;
             calibrationUpdates++;
-
-            /*std::cout << "BIAS-X: " << minX << " - " << maxX << std::endl;
+            isSet = true;
+           /* std::cout << "BIAS-X: " << minX << " - " << maxX << std::endl;
             std::cout << "BIAS-Y: " << minY << " - " << maxY << std::endl;
             std::cout << "BIAS-Z: " << minZ << " - " << maxZ << std::endl;
-            std::cout << "BIAS: " << x << " " << y << " " << z << std::endl;
-            */
-            isSet = true;
-
+            std::cout << "BIAS: " << x << " " << y << " " << z << std::endl; */
             return true;
         }
         else
@@ -113,19 +113,10 @@ int main()
     rs2::config cfg;
 
     // Add desired streams to configuration
-    cfg.enable_stream(RS2_STREAM_ACCEL, RS2_FORMAT_MOTION_XYZ32F);
-    cfg.enable_stream(RS2_STREAM_GYRO, RS2_FORMAT_MOTION_XYZ32F);
+    cfg.enable_stream(RS2_STREAM_ACCEL, RS2_FORMAT_MOTION_XYZ32F, 250);
+    cfg.enable_stream(RS2_STREAM_GYRO, RS2_FORMAT_MOTION_XYZ32F, 400);
 
-    cfg.enable_stream(RS2_STREAM_DEPTH, 640, 480, RS2_FORMAT_Z16, 30);
-    //cfg.enable_stream(RS2_STREAM_DEPTH, 848, 480, RS2_FORMAT_Z16, 90);
-
-    //
-    // Create the PCL visualizer
-    //
-    //pcl::visualization::PCLVisualizer viewer("whitestick");
-
-    // Add some features to our viewport
-  //  viewer.addCoordinateSystem(1.0, "axis", 0);
+    //cfg.enable_stream(RS2_STREAM_DEPTH, 640, 480, RS2_FORMAT_Z16, 30);
 
     float thetaX = 0.0;
     float thetaY = 0.0;
@@ -133,16 +124,15 @@ int main()
 
     GyroBias bias;
 
-    //
     // Start capturing
-    //
     auto profile = pipe.start(cfg);
 
     bool firstAccel = true;
     double last_ts[RS2_STREAM_COUNT];
     double dt[RS2_STREAM_COUNT];
-    Eigen::Affine3f rot;
-    std::mutex mtx;
+   // Eigen::Affine3f rot;
+    rs2::matrix4 rot;
+  //  std::mutex mtx;
     bool rot_valid = false;
 
     window app(1280, 720, "RealSense Motion Example");
@@ -151,10 +141,6 @@ int main()
     // register callbacks to allow manipulation of the pointcloud
     register_glfw_callbacks(app, app_state);
 
-    auto depth_stream = profile.get_stream(RS2_STREAM_DEPTH);
-    auto imu_stream = profile.get_stream(RS2_STREAM_ACCEL);
-
-    auto extrinsics = depth_stream.get_extrinsics_to(imu_stream);
 
     std::vector<float3> positions;
     std::vector<float3> normals;
@@ -164,106 +150,40 @@ int main()
     double sx = 0.;
     for (auto& xyz : positions)
     {
-        xyz.x = (xyz.x - extrinsics.translation[0] * 1000.f) / 30.f;
-        xyz.y = (xyz.y - extrinsics.translation[1] * 1000.f) / 30.f;
-        xyz.z = (xyz.z - extrinsics.translation[2] * 1000.f) / 30.f;
+        xyz.x = (xyz.x - 0 * 1000.f) / 30.f;
+        xyz.y = (xyz.y - 0 * 1000.f) / 30.f;
+        xyz.z = (xyz.z - 0 * 1000.f) / 30.f;
         sx += xyz.x;
     }
     sx /= positions.size();
+  //  float prev = 0;
+  //  float accelX = 0;
+
+    rs2::rates_printer p;
+    float alpha = 0.98;
+    rs2::estimate_motion em;
 
     // Main loop
     while (app)
     {
+        glfwSwapInterval(0);
+
         rs2::frameset frames;
+        rs2_quaternion rot_q;
+
         frames = pipe.wait_for_frames();
-      /*  if (!pipe.poll_for_frames(&frames))
-        {
-            // Redraw etc
-            viewer.spinOnce();
-            continue;
-        } */
 
-        //std::cout << "Num frames: " << frames.size() << " ";
-        for (auto f : frames)
-        {
-            rs2::stream_profile profile = f.get_profile();
-
-            unsigned long fnum = f.get_frame_number();
-            double ts = f.get_timestamp();
-            dt[profile.stream_type()] = (ts - last_ts[profile.stream_type()]) / 1000.0;
-            last_ts[profile.stream_type()] = ts;
-        }
-
-        auto depth = frames.get_depth_frame();
-        auto colored_frame = frames.get_color_frame();
 
         auto fa = frames.first(RS2_STREAM_ACCEL, RS2_FORMAT_MOTION_XYZ32F);
-        rs2::motion_frame accel = fa.as<rs2::motion_frame>();
+       // rs2::motion_frame accel = fa.as<rs2::motion_frame>();
 
         auto fg = frames.first(RS2_STREAM_GYRO, RS2_FORMAT_MOTION_XYZ32F);
-        rs2::motion_frame gyro = fg.as<rs2::motion_frame>();
+        //rs2::motion_frame gyro = fg.as<rs2::motion_frame>();
 
-        if (gyro)
-        {
-            rs2_vector gv = gyro.get_motion_data();
-
-            bias.update(gv.x, gv.y, gv.z);
-
-            double gyroX = gv.x - bias.x;
-            double gyroY = gv.y - bias.y;
-            double gyroZ = gv.z - bias.z;
-
-            gyroX *= dt[RS2_STREAM_GYRO];
-            gyroY *= dt[RS2_STREAM_GYRO];
-            gyroZ *= dt[RS2_STREAM_GYRO];
-
-            // 
-            // Get compensation from GYRO
-            // 
-
-            // Around "blue", poisitive => right
-            thetaX += gyroZ;
-
-            // Yaw...don't compensate...
-            thetaY -= gyroY;
-
-            // Around "red", positve => right
-            thetaZ -= gyroX;
-
-        }
-
-        if (accel)
-        {
-            rs2_vector av = accel.get_motion_data();
-            float R = sqrtf(av.x * av.x + av.y * av.y + av.z * av.z);
-
-            float accelX = acos(av.x / R);
-            float accelY = acos(av.y / R);
-            float accelZ = acos(av.z / R);
-
-            //std::cout << "accelX=" << accelX*180.0/M_PI << " accelY=" << accelY*180.0/M_PI << " accelZ=" << accelZ*180.0/M_PI << std::endl;
-
-            if (firstAccel)
-            {
-                firstAccel = false;
-                thetaX = accelX;
-                thetaY = accelY;
-                thetaZ = accelZ;
-            }
-            else
-            {
-                // Compensate GYRO-drift with ACCEL
-                thetaX = thetaX * 0.98 + accelX * 0.02;
-                thetaY = thetaY * 0.98 + accelY * 0.02;
-                thetaZ = thetaZ * 0.98 + accelZ * 0.02;
-            }
-        }
-
-        // Transform the cloud according to built in IMU (to get it straight)
-        Eigen::Affine3f rx = Eigen::Affine3f(Eigen::AngleAxisf(-(thetaZ - M_PI/2), Eigen::Vector3f(1, 0, 0)));
-        Eigen::Affine3f ry = Eigen::Affine3f(Eigen::AngleAxisf(0.0, Eigen::Vector3f(0, 1, 0)));
-        Eigen::Affine3f rz = Eigen::Affine3f(Eigen::AngleAxisf(thetaX - M_PI/2, Eigen::Vector3f(0, 0, 1)));
-        rot = rz * ry * rx;
+        rs2::pose_frame pose = em.process(fa); // TODO: same with fg?
+        auto pose_data = pose.get_pose_data();
+        auto rot_q = pose_data.rotation;
+        rs2::matrix4 rot(rot_q);
 
         // Set the current clear color to black and the current drawing color to
         // white.
@@ -277,18 +197,16 @@ int main()
         glLoadIdentity();
         gluPerspective(60.0, 4.0 / 3.0, 1, 40);
 
-        //  std::lock_guard<std::mutex> lock(mutex);
-
         glClear(GL_COLOR_BUFFER_BIT);
         glMatrixMode(GL_MODELVIEW);
 
         glLoadIdentity();
-        gluLookAt(sx, 0, 5, sx, 0, 0, 0, -1, 0);
-        //gluLookAt(0, 0, 0, 0, 0, 1, 0, -1, 0);
+        gluLookAt(sx, 0, 5, sx, 0, 0, 0, 1, 0);
+        //gluLookAt(sx, 0, -5, sx, 0, 0, 0, 1, 0);
 
-        glTranslatef(0, 0, +0.5f + app_state.offset_y*0.05f);
-        glRotated(app_state.pitch, -1, 0, 0);
-        glRotated(app_state.yaw, 0, 1, 0);
+        glTranslatef(0, 0, +0.5f + app_state.offset_y*0.15f);
+        glRotated(app_state.pitch, 1, 0, 0);
+        glRotated(app_state.yaw, 0, -1, 0);
 
         glColor3f(1.0, 1.0, 1.0);
 
@@ -297,33 +215,32 @@ int main()
         glColor4f(0.4f, 0.4f, 0.4f, 1.f);
 
         // Render "floor" grid
-        for (int i = 0; i <= 6; i++)
+        for (int i = 0; i <= 8; i++)
         {
-            glVertex3i(i - 3, 1, 0);
-            glVertex3i(i - 3, 1, 6);
-            glVertex3i(-3, 1, i);
-            glVertex3i(3, 1, i);
+            glVertex3i(i - 4, -1, 0);
+            glVertex3i(i - 4, -1, 8);
+            glVertex3i(-4, -1, i);
+            glVertex3i(4, -1, i);
         }
         glEnd();
 
+        glLineWidth(2);
         glBegin(GL_LINES);
-
-        // std::lock_guard<std::mutex> lock(mtx);
-        glColor3f(0.5, 0, 0); glVertex3f(0, 0, 0); glVertex3f(rot(0, 0), rot(1, 0), rot(2, 0));
-        glColor3f(0, 0.5, 0); glVertex3f(0, 0, 0); glVertex3f(rot(0, 1), rot(1, 1), rot(2, 1));
-        glColor3f(0, 0, 0.5); glVertex3f(0, 0, 0); glVertex3f(rot(0, 2), rot(1, 2), rot(2, 2));
+        glColor3f(1, 0, 0); glVertex3f(0, 0, 0); glVertex3f(rot.mat[0][0], rot.mat[0][1], rot.mat[0][2]);
+        glColor3f(0, 1, 0); glVertex3f(0, 0, 0); glVertex3f(rot.mat[1][0], rot.mat[1][1], rot.mat[1][2]);
+        glColor3f(0, 0, 1); glVertex3f(0, 0, 0); glVertex3f(rot.mat[2][0], rot.mat[2][1], rot.mat[2][2]);
         glEnd();
-        //glDisable(GL_DEPTH_TEST);
+
         glEnable(GL_BLEND);
         glBlendFunc(GL_ONE, GL_ONE);
 
         float curr[4][4];
         float mult[4][4];
         float mat[4][4] = {
-            { rot(0,0),rot(1,0),rot(2,0),0.f },
-            { rot(0,1),rot(1,1),rot(2,1),0.f },
-            { rot(0,2),rot(1,2),rot(2,2),0.f },
-            { 0.f,0.f,0.f,1.f }
+            { rot.mat[0][0], rot.mat[0][1], rot.mat[0][2], rot.mat[0][3] },
+            { rot.mat[1][0], rot.mat[1][1], rot.mat[1][2], rot.mat[1][3] },
+            { rot.mat[2][0], rot.mat[2][1], rot.mat[2][2], rot.mat[2][3] },
+            { rot.mat[3][0], rot.mat[3][1], rot.mat[3][2], rot.mat[3][3] }
         };
 
         glGetFloatv(GL_MODELVIEW_MATRIX, (float*)curr);
@@ -355,8 +272,6 @@ int main()
         glEnd();
 
         glDisable(GL_BLEND);
-        //glEnable(GL_DEPTH_TEST);
-
 
         glFlush();
     }

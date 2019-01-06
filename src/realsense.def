@@ -149,6 +149,7 @@ EXPORTS
     rs2_allocate_synthetic_video_frame
     rs2_allocate_points
     rs2_allocate_composite_frame
+    rs2_allocate_pose_frame
     rs2_synthetic_frame_ready
     rs2_create_processing_block
     rs2_create_processing_block_fptr

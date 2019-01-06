@@ -341,6 +341,46 @@ namespace librealsense
         return res;
     }
 
+    //_source, profile.get(), original.get(), q, gv, av, frame_type &e
+    frame_interface* synthetic_source::allocate_pose_frame(std::shared_ptr<stream_profile_interface> stream, rs2_quaternion q,
+        rs2_vector gv, rs2_vector av, rs2_extension frame_type)
+    {
+        pose_frame* pf = nullptr;
+
+        static unsigned long long frame_num = 0; //TODO - TM2 doesn't expose frame number for pose
+
+        // TODO: add the time info (why?)
+     /*   auto ts_double_nanos = duration<double, std::nano>(timestamp);
+        duration<double, std::milli> ts_ms(ts_double_nanos);
+        auto sys_ts_double_nanos = duration<double, std::nano>(tm_frame.systemTimestamp);
+        duration<double, std::milli> system_ts_ms(sys_ts_double_nanos);
+        pose_frame_metadata frame_md = { 0 };
+        frame_md.arrival_ts = tm_frame.arrivalTimeStamp;
+        frame_additional_data additional_data(ts_ms.count(), frame_num++, system_ts_ms.count(), sizeof(frame_md), (uint8_t*)&frame_md,
+            tm_frame.arrivalTimeStamp, 0, 0, false);
+        */
+        frame_additional_data additional_data(0, 0, 0, 0, 0, 0, 0, 0, false);
+
+        frame_holder frame = _actual_source.alloc_frame(RS2_EXTENSION_POSE_FRAME, sizeof(librealsense::pose_frame::pose_info), additional_data, true);
+        if (!frame) throw wrong_api_call_sequence_exception("Out of frame resources!");
+        auto pose_frame = static_cast<librealsense::pose_frame*>(frame.frame);
+        //frame->set_timestamp(ts_ms.count());
+        frame->set_timestamp_domain(RS2_TIMESTAMP_DOMAIN_HARDWARE_CLOCK);
+        frame->set_stream(stream);
+
+        auto info = reinterpret_cast<librealsense::pose_frame::pose_info*>(pose_frame->data.data());
+        //  info->translation = toFloat3(tm_frame.translation);
+        //  info->velocity = toFloat3(tm_frame.velocity);
+        info->acceleration = { av.x, av.y, av.z };
+        info->rotation = { q.x, q.y, q.z, q.w };
+        info->angular_velocity = { gv.x, gv.y, gv.z };
+        //info->angular_acceleration = toFloat3(tm_frame.angularAcceleration);
+        //info->tracker_confidence = tm_frame.trackerConfidence;
+        //info->mapper_confidence = tm_frame.mapperConfidence;
+
+        return frame;
+    }
+
     int get_embeded_frames_size(frame_interface* f)
     {
         if (f == nullptr) return 0;

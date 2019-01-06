@@ -71,6 +71,17 @@ namespace rs2
             error::handle(e);
             return result;
         }
+
+
+        frame allocate_pose_frame(const stream_profile& profile, rs2_quaternion q, rs2_vector gv,
+            rs2_vector av, rs2_extension frame_type = RS2_EXTENSION_POSE_FRAME) const
+        {
+            rs2_error* e = nullptr;
+            auto result = rs2_allocate_pose_frame(_source, profile.get(), q, gv, av, frame_type, &e);
+            error::handle(e);
+            return result;
+        }
+
         /**
         * Invoke the callback funtion informing the frame is ready.
         *
